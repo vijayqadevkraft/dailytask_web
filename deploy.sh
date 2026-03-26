@@ -8,7 +8,7 @@ print_step() {
 }
 
 # -----------------------------
-# Load ENV (FIXED)
+# Load ENV
 # -----------------------------
 print_step "Loading environment variables"
 
@@ -19,21 +19,17 @@ if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
     set +a
 else
-    echo "❌ Env file not found at $ENV_FILE"
+    echo "❌ Env file not found"
     exit 1
 fi
 
-# -----------------------------
-# Variables
-# -----------------------------
 APP_NAME=${APP_NAME:-"dailytask-app"}
 PROJECT_DIR=${PROJECT_DIR:-"/var/www/dailytask_web"}
-REPO_URL=${REPO_URL:-""}
 PORT=${PORT:-3000}
 DOMAIN=${DOMAIN:-""}
 PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
 
-echo "App: $APP_NAME | Port: $PORT | Domain: $DOMAIN"
+echo "App: $APP_NAME | Port: $PORT"
 
 # -----------------------------
 # Install Dependencies
@@ -41,47 +37,43 @@ echo "App: $APP_NAME | Port: $PORT | Domain: $DOMAIN"
 print_step "Installing dependencies"
 
 sudo apt update -y
-sudo apt install -y curl git nginx certbot python3-certbot-nginx
+sudo apt install -y curl git nginx
 
 # -----------------------------
-# Node.js
+# Node.js + PM2
 # -----------------------------
-print_step "Checking Node.js"
+print_step "Checking Node.js & PM2"
 
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
     sudo apt install -y nodejs
 fi
 
-# -----------------------------
-# PM2
-# -----------------------------
-print_step "Checking PM2"
-
 if ! command -v pm2 &> /dev/null; then
     sudo npm install -g pm2
 fi
 
 # -----------------------------
-# Use Jenkins Workspace (FIXED)
+# Copy code to production dir
 # -----------------------------
-print_step "Using workspace"
+print_step "Copying code to /var/www"
 
-WORK_DIR=${WORKSPACE:-$(pwd)}
-cd $WORK_DIR
+sudo mkdir -p $PROJECT_DIR
+sudo rsync -av --delete $WORKSPACE/ $PROJECT_DIR/
 
-echo "Current Directory: $(pwd)"
-ls -l
+sudo chown -R ubuntu:ubuntu $PROJECT_DIR
+
+cd $PROJECT_DIR
 
 # -----------------------------
-# Install Dependencies
+# Install app dependencies
 # -----------------------------
 print_step "Installing app dependencies"
 
 npm install
 
 # -----------------------------
-# Detect Entry File
+# Detect entry file
 # -----------------------------
 print_step "Detecting entry file"
 
@@ -89,32 +81,23 @@ if [ -f "server.js" ]; then
     ENTRY_FILE="server.js"
 elif [ -f "app.js" ]; then
     ENTRY_FILE="app.js"
-elif [ -f "index.js" ]; then
-    ENTRY_FILE="index.js"
 else
-    echo "❌ No entry file found"
-    exit 1
+    ENTRY_FILE="index.js"
 fi
 
 echo "Using: $ENTRY_FILE"
 
 # -----------------------------
-# Start App
+# Start app (IMPORTANT FIX 🔥)
 # -----------------------------
-print_step "Starting app"
+print_step "Starting app with PM2 (ubuntu user)"
 
-export PORT=$PORT
-
-if pm2 list | grep -q "$APP_NAME"; then
-    pm2 restart $APP_NAME --update-env
-else
-    pm2 start $ENTRY_FILE --name $APP_NAME
-fi
-
-pm2 save
+sudo -u ubuntu pm2 delete $APP_NAME || true
+sudo -u ubuntu pm2 start $PROJECT_DIR/$ENTRY_FILE --name $APP_NAME
+sudo -u ubuntu pm2 save
 
 # -----------------------------
-# Configure Nginx (FIXED)
+# Configure Nginx
 # -----------------------------
 print_step "Configuring Nginx"
 
@@ -136,13 +119,9 @@ server {
 }
 EOL
 
-# Enable config
 sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
-
-# 🔥 REMOVE DEFAULT CONFIG (CRITICAL FIX)
 sudo rm -f /etc/nginx/sites-enabled/default
 
-# Restart nginx
 sudo nginx -t
 sudo systemctl restart nginx
 
@@ -153,20 +132,11 @@ print_step "Verifying deployment"
 
 sleep 3
 
-if curl -s http://localhost > /dev/null; then
-    echo "✅ App is reachable via Nginx"
+if curl -s http://localhost:$PORT > /dev/null; then
+    echo "✅ App is running"
 else
-    echo "❌ Nginx routing failed"
+    echo "❌ App failed"
     exit 1
-fi
-
-# -----------------------------
-# SSL (Optional)
-# -----------------------------
-if [ -n "$DOMAIN" ]; then
-    print_step "Setting up SSL"
-
-    sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos -m admin@$DOMAIN || true
 fi
 
 # -----------------------------
@@ -174,8 +144,7 @@ fi
 # -----------------------------
 print_step "Deployment Completed 🎉"
 
-echo "🌐 Access:"
 echo "http://$PUBLIC_IP"
 echo "http://$DOMAIN"
 
-pm2 status
+sudo -u ubuntu pm2 status
