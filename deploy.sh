@@ -15,7 +15,7 @@ print_step() {
 # -----------------------------
 print_step "Loading environment variables"
 
-ENV_FILE="/home/ubuntu/.env"
+ENV_FILE="/opt/.env"
 
 if [ -f "$ENV_FILE" ]; then
     set -a
