@@ -1,9 +1,6 @@
 #!/bin/bash
 set -e
 
-# -----------------------------
-# Function
-# -----------------------------
 print_step() {
     echo "----------------------------------------"
     echo "$1"
@@ -11,7 +8,7 @@ print_step() {
 }
 
 # -----------------------------
-# Load ENV (from server, not repo)
+# Load ENV (FIXED)
 # -----------------------------
 print_step "Loading environment variables"
 
@@ -27,63 +24,48 @@ else
 fi
 
 # -----------------------------
-# Default Variables
+# Variables
 # -----------------------------
-APP_NAME=${APP_NAME:-dailytask-app}
+APP_NAME=${APP_NAME:-"dailytask-app"}
+PROJECT_DIR=${PROJECT_DIR:-"/var/www/dailytask_web"}
+REPO_URL=${REPO_URL:-""}
 PORT=${PORT:-3000}
-DOMAIN=${DOMAIN:-localhost}
+DOMAIN=${DOMAIN:-""}
+PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
 
-echo "App Name: $APP_NAME"
-echo "Port: $PORT"
-echo "Domain: $DOMAIN"
+echo "App: $APP_NAME | Port: $PORT | Domain: $DOMAIN"
 
 # -----------------------------
-# Step 1: Install Dependencies
+# Install Dependencies
 # -----------------------------
 print_step "Installing dependencies"
 
 sudo apt update -y
-
-install_if_missing() {
-    if ! dpkg -l | grep -q "$1"; then
-        echo "Installing $1..."
-        sudo apt install -y $1
-    else
-        echo "$1 already installed ✔"
-    fi
-}
-
-install_if_missing curl
-install_if_missing git
-install_if_missing nginx
+sudo apt install -y curl git nginx certbot python3-certbot-nginx
 
 # -----------------------------
-# Step 2: Node.js
+# Node.js
 # -----------------------------
 print_step "Checking Node.js"
 
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
     sudo apt install -y nodejs
-else
-    echo "Node.js already installed ✔"
 fi
 
 # -----------------------------
-# Step 3: PM2
+# PM2
 # -----------------------------
 print_step "Checking PM2"
 
 if ! command -v pm2 &> /dev/null; then
     sudo npm install -g pm2
-else
-    echo "PM2 already installed ✔"
 fi
 
 # -----------------------------
-# Step 4: Use Jenkins Workspace
+# Use Jenkins Workspace (FIXED)
 # -----------------------------
-print_step "Using Jenkins workspace"
+print_step "Using workspace"
 
 WORK_DIR=${WORKSPACE:-$(pwd)}
 cd $WORK_DIR
@@ -92,19 +74,14 @@ echo "Current Directory: $(pwd)"
 ls -l
 
 # -----------------------------
-# Step 5: Install App
+# Install Dependencies
 # -----------------------------
 print_step "Installing app dependencies"
 
-if [ -f "package.json" ]; then
-    npm install
-else
-    echo "❌ package.json not found"
-    exit 1
-fi
+npm install
 
 # -----------------------------
-# Step 6: Detect Entry File
+# Detect Entry File
 # -----------------------------
 print_step "Detecting entry file"
 
@@ -122,9 +99,9 @@ fi
 echo "Using: $ENTRY_FILE"
 
 # -----------------------------
-# Step 7: Start App
+# Start App
 # -----------------------------
-print_step "Running app with PM2"
+print_step "Starting app"
 
 export PORT=$PORT
 
@@ -137,7 +114,7 @@ fi
 pm2 save
 
 # -----------------------------
-# Step 8: Configure Nginx
+# Configure Nginx (FIXED)
 # -----------------------------
 print_step "Configuring Nginx"
 
@@ -146,7 +123,7 @@ NGINX_CONF="/etc/nginx/sites-available/$APP_NAME"
 sudo tee $NGINX_CONF > /dev/null <<EOL
 server {
     listen 80;
-    server_name $DOMAIN;
+    server_name $DOMAIN $PUBLIC_IP;
 
     location / {
         proxy_pass http://localhost:$PORT;
@@ -154,19 +131,51 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
     }
 }
 EOL
 
+# Enable config
 sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
 
+# 🔥 REMOVE DEFAULT CONFIG (CRITICAL FIX)
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Restart nginx
 sudo nginx -t
 sudo systemctl restart nginx
+
+# -----------------------------
+# Verify
+# -----------------------------
+print_step "Verifying deployment"
+
+sleep 3
+
+if curl -s http://localhost > /dev/null; then
+    echo "✅ App is reachable via Nginx"
+else
+    echo "❌ Nginx routing failed"
+    exit 1
+fi
+
+# -----------------------------
+# SSL (Optional)
+# -----------------------------
+if [ -n "$DOMAIN" ]; then
+    print_step "Setting up SSL"
+
+    sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos -m admin@$DOMAIN || true
+fi
 
 # -----------------------------
 # Done
 # -----------------------------
 print_step "Deployment Completed 🎉"
 
-echo "🌐 App running at: http://$DOMAIN"
+echo "🌐 Access:"
+echo "http://$PUBLIC_IP"
+echo "http://$DOMAIN"
+
 pm2 status
