@@ -61,7 +61,8 @@ print_step "Copying code to /var/www"
 sudo mkdir -p $PROJECT_DIR
 sudo rsync -av --delete $WORKSPACE/ $PROJECT_DIR/
 
-sudo chown -R ubuntu:ubuntu $PROJECT_DIR
+# 🔥 FIX: give permission to Jenkins (important)
+sudo chown -R jenkins:jenkins $PROJECT_DIR
 
 cd $PROJECT_DIR
 
@@ -70,7 +71,8 @@ cd $PROJECT_DIR
 # -----------------------------
 print_step "Installing app dependencies"
 
-npm install
+# 🔥 FIX: run npm as jenkins
+sudo -u jenkins npm install
 
 # -----------------------------
 # Detect entry file
@@ -88,7 +90,7 @@ fi
 echo "Using: $ENTRY_FILE"
 
 # -----------------------------
-# Start app (IMPORTANT FIX 🔥)
+# Start app with PM2
 # -----------------------------
 print_step "Starting app with PM2 (ubuntu user)"
 
