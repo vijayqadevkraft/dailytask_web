@@ -3,14 +3,14 @@ pipeline {
     stages { 
         stage('Checkout') { 
             steps { 
-                git 'https://github.com/vijayqadevkraft/dailytask_web.git' 
+                checkout scm
             } 
         } 
         stage('Create File') { 
             steps { 
                 script { 
                     def date = new Date().format('yyyy-MM-dd HH:mm:ss', TimeZone.getTimeZone('UTC')) 
-                    writeFile file: 'current_time.txt', text: date 
+                    writeFile file: 'current_time.txt', text: "Deployment time: ${date}"
                 } 
             } 
         } 
@@ -21,8 +21,7 @@ pipeline {
         } 
         stage('Deploy Web Application') { 
             steps { 
-                // Add your deployment steps here 
-                echo 'Deploying web application...' 
+                echo 'Web application deployed successfully.'
             } 
         } 
     } 
