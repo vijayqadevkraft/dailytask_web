@@ -12,15 +12,20 @@ print_step() {
 }
 
 # -----------------------------
-# Setup PATH (fix for PM2/npm)
+# Setup PATH
 # -----------------------------
 export PATH=$PATH:/usr/local/bin:/usr/bin
 
 # -----------------------------
-# Navigate to web-application
+# Navigate to Project Root (FIXED)
 # -----------------------------
-print_step "Navigating to web-application directory"
-cd "$(dirname "$0")/../web-application"
+print_step "Navigating to project directory"
+cd "$(dirname "$0")/.."
+
+# Debug
+print_step "Checking source files"
+pwd
+ls -l
 
 # -----------------------------
 # Load ENV
@@ -43,7 +48,8 @@ APP_NAME=${APP_NAME:-"dailytask-app"}
 PROJECT_DIR=${PROJECT_DIR:-"/var/www/dailytask_web"}
 PORT=${PORT:-3000}
 DOMAIN=${DOMAIN:-""}
-PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
+PUBLIC_IP=$(curl -s ifconfig.me || echo "localhost")
+SERVER_NAME=${DOMAIN:-$PUBLIC_IP}
 
 echo "App: $APP_NAME | Port: $PORT"
 echo "Project Dir: $PROJECT_DIR"
@@ -79,20 +85,20 @@ print_step "Deploying application to $PROJECT_DIR"
 
 sudo mkdir -p "$PROJECT_DIR"
 sudo rsync -av --delete ./ "$PROJECT_DIR/"
-sudo chown -R jenkins:jenkins "$PROJECT_DIR"
+sudo chown -R $(whoami):$(whoami) "$PROJECT_DIR"
+
+# Verify copy
+print_step "Verifying copied files"
+ls -l "$PROJECT_DIR"
 
 cd "$PROJECT_DIR"
-
-# Debug
-echo "Files in project:"
-ls -l
 
 # -----------------------------
 # Install App Dependencies
 # -----------------------------
 print_step "Installing app dependencies"
 
-npm install
+npm install --production
 
 # -----------------------------
 # Detect Entry File
@@ -113,21 +119,25 @@ fi
 echo "Using entry file: $ENTRY_FILE"
 
 # -----------------------------
-# Start App with PM2 (Jenkins user)
+# Start App with PM2
 # -----------------------------
 print_step "Starting application with PM2"
 
 pm2 delete "$APP_NAME" || true
 
-pm2 start "$PROJECT_DIR/$ENTRY_FILE" --name "$APP_NAME" --update-env || {
+pm2 start "$ENTRY_FILE" --name "$APP_NAME" --update-env
+
+sleep 3
+pm2 status
+
+if ! pm2 list | grep -q "$APP_NAME"; then
     echo "❌ PM2 failed to start app"
+    pm2 logs --lines 50
     exit 1
-}
+fi
 
 pm2 save
-
-# Optional: auto-start on reboot
-pm2 startup || true
+sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $(whoami) --hp $HOME
 
 # -----------------------------
 # Configure Nginx
@@ -139,7 +149,7 @@ NGINX_CONF="/etc/nginx/sites-available/$APP_NAME"
 sudo tee "$NGINX_CONF" > /dev/null <<EOL
 server {
     listen 80;
-    server_name $DOMAIN $PUBLIC_IP;
+    server_name $SERVER_NAME;
 
     location / {
         proxy_pass http://localhost:$PORT;
@@ -156,7 +166,7 @@ sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 
 sudo nginx -t
-sudo systemctl restart nginx
+sudo systemctl reload nginx || sudo systemctl restart nginx
 
 # -----------------------------
 # Verify Deployment
@@ -165,7 +175,7 @@ print_step "Verifying application"
 
 sleep 5
 
-if curl -s "http://localhost:$PORT" > /dev/null; then
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:$PORT | grep -q "200"; then
     echo "✅ Application is running successfully"
 else
     echo "❌ Application failed to start"
