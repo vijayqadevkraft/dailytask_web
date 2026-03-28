@@ -1,17 +1,25 @@
 #!/bin/bash
 set -e
 
+# -----------------------------
+# Utility Function
+# -----------------------------
 print_step() {
+    echo ""
     echo "----------------------------------------"
     echo "$1"
     echo "----------------------------------------"
 }
 
 # -----------------------------
-# Navigate to web-application directory
+# Setup PATH (fix for PM2/npm)
+# -----------------------------
+export PATH=$PATH:/usr/local/bin:/usr/bin
+
+# -----------------------------
+# Navigate to web-application
 # -----------------------------
 print_step "Navigating to web-application directory"
-# This script is located in /script, so we move to /web-application relative to its location
 cd "$(dirname "$0")/../web-application"
 
 # -----------------------------
@@ -26,70 +34,68 @@ if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
     set +a
 else
-    echo "❌ Env file not found"
-    # Note: In some environments, we might want to continue with defaults
-    # For now, we follow the original script's exit 1.
+    echo "❌ Env file not found at $ENV_FILE"
     exit 1
 fi
 
+# Defaults
 APP_NAME=${APP_NAME:-"dailytask-app"}
-# Assuming the production project dir remains the same or includes the web-application path
 PROJECT_DIR=${PROJECT_DIR:-"/var/www/dailytask_web"}
 PORT=${PORT:-3000}
 DOMAIN=${DOMAIN:-""}
 PUBLIC_IP=$(curl -s http://checkip.amazonaws.com)
 
 echo "App: $APP_NAME | Port: $PORT"
+echo "Project Dir: $PROJECT_DIR"
 
 # -----------------------------
 # Install Dependencies
 # -----------------------------
-print_step "Installing dependencies"
+print_step "Installing system dependencies"
 
 sudo apt update -y
-sudo apt install -y curl git nginx
+sudo apt install -y curl git nginx rsync
 
 # -----------------------------
-# Node.js + PM2
+# Install Node.js & PM2
 # -----------------------------
 print_step "Checking Node.js & PM2"
 
-if ! command -v node &> /dev/null; then
+if ! node -v &> /dev/null; then
+    echo "Installing Node.js..."
     curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
     sudo apt install -y nodejs
 fi
 
-if ! command -v pm2 &> /dev/null; then
+if ! pm2 -v &> /dev/null; then
+    echo "Installing PM2..."
     sudo npm install -g pm2
 fi
 
 # -----------------------------
-# Copy code to production dir
+# Copy Code
 # -----------------------------
-print_step "Copying code to /var/www"
+print_step "Deploying application to $PROJECT_DIR"
 
-sudo mkdir -p $PROJECT_DIR
-# Note: $WORKSPACE should be set by Jenkins.
-# We copy the entire workspace or just the web-application folder?
-# The original script copied $WORKSPACE/. Since we moved everything to web-application/,
-# we should probably copy the contents of the current directory (web-application/)
-sudo rsync -av --delete ./ $PROJECT_DIR/
+sudo mkdir -p "$PROJECT_DIR"
+sudo rsync -av --delete ./ "$PROJECT_DIR/"
+sudo chown -R jenkins:jenkins "$PROJECT_DIR"
 
-# 🔥 FIX: give permission to Jenkins (important)
-sudo chown -R jenkins:jenkins $PROJECT_DIR
+cd "$PROJECT_DIR"
 
-cd $PROJECT_DIR
+# Debug
+echo "Files in project:"
+ls -l
 
 # -----------------------------
-# Install app dependencies
+# Install App Dependencies
 # -----------------------------
 print_step "Installing app dependencies"
 
-# 🔥 FIX: run npm as jenkins
-sudo -u jenkins npm install
+npm install
 
 # -----------------------------
-# Detect entry file
+# Detect Entry File
 # -----------------------------
 print_step "Detecting entry file"
 
@@ -97,20 +103,31 @@ if [ -f "server.js" ]; then
     ENTRY_FILE="server.js"
 elif [ -f "app.js" ]; then
     ENTRY_FILE="app.js"
-else
+elif [ -f "index.js" ]; then
     ENTRY_FILE="index.js"
+else
+    echo "❌ No entry file found!"
+    exit 1
 fi
 
-echo "Using: $ENTRY_FILE"
+echo "Using entry file: $ENTRY_FILE"
 
 # -----------------------------
-# Start app with PM2
+# Start App with PM2 (Jenkins user)
 # -----------------------------
-print_step "Starting app with PM2 (ubuntu user)"
+print_step "Starting application with PM2"
 
-sudo -u ubuntu pm2 delete $APP_NAME || true
-sudo -u ubuntu pm2 start $PROJECT_DIR/$ENTRY_FILE --name $APP_NAME
-sudo -u ubuntu pm2 save
+pm2 delete "$APP_NAME" || true
+
+pm2 start "$PROJECT_DIR/$ENTRY_FILE" --name "$APP_NAME" --update-env || {
+    echo "❌ PM2 failed to start app"
+    exit 1
+}
+
+pm2 save
+
+# Optional: auto-start on reboot
+pm2 startup || true
 
 # -----------------------------
 # Configure Nginx
@@ -119,7 +136,7 @@ print_step "Configuring Nginx"
 
 NGINX_CONF="/etc/nginx/sites-available/$APP_NAME"
 
-sudo tee $NGINX_CONF > /dev/null <<EOL
+sudo tee "$NGINX_CONF" > /dev/null <<EOL
 server {
     listen 80;
     server_name $DOMAIN $PUBLIC_IP;
@@ -135,32 +152,36 @@ server {
 }
 EOL
 
-sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
+sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 
 sudo nginx -t
 sudo systemctl restart nginx
 
 # -----------------------------
-# Verify
+# Verify Deployment
 # -----------------------------
-print_step "Verifying deployment"
+print_step "Verifying application"
 
-sleep 3
+sleep 5
 
-if curl -s http://localhost:$PORT > /dev/null; then
-    echo "✅ App is running"
+if curl -s "http://localhost:$PORT" > /dev/null; then
+    echo "✅ Application is running successfully"
 else
-    echo "❌ App failed"
+    echo "❌ Application failed to start"
+    pm2 logs "$APP_NAME" --lines 50
     exit 1
 fi
 
 # -----------------------------
-# Done
+# Final Output
 # -----------------------------
 print_step "Deployment Completed 🎉"
 
+echo "🌐 Access URLs:"
 echo "http://$PUBLIC_IP"
-echo "http://$DOMAIN"
+[ -n "$DOMAIN" ] && echo "http://$DOMAIN"
 
-sudo -u ubuntu pm2 status
+echo ""
+echo "📊 PM2 Status:"
+pm2 status
