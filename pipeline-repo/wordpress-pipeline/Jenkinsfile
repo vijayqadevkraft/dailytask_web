@@ -1,0 +1,37 @@
+pipeline {
+    agent any
+    stages {
+        stage('Checkout Pipeline Repo') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Clone Application Repository') {
+            steps {
+                dir('webapplication-repo') {
+                    // In a real multi-repo Jenkins environment, you would clone the repo here
+                    git url: 'https://github.com/your-org/webapplication-repo.git', branch: 'main'
+                }
+            }
+        }
+        stage('Clone Script Repository') {
+            steps {
+                dir('script-repo') {
+                    // In a real multi-repo Jenkins environment, you would clone the repo here
+                    git url: 'https://github.com/your-org/script-repo.git', branch: 'main'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                echo 'Building WordPress application (if applicable)...'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                echo 'Executing wordpress-script/deploy.sh...'
+                sh 'bash script-repo/wordpress-script/deploy.sh'
+            }
+        }
+    }
+}
